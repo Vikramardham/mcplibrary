@@ -7,154 +7,98 @@ import argparse
 import sys
 import os
 from urllib.parse import urljoin, urlparse
-
-import httpx
+import re
+import requests
 from bs4 import BeautifulSoup
 from rich.console import Console
 from rich.table import Table
+from trafilatura import fetch_url, extract
 
 
 def validate_url(url):
-    """Validate if the provided URL is valid."""
-    parsed = urlparse(url)
-    return bool(parsed.netloc and parsed.scheme)
+    """Validate if a URL is well-formed.
+
+    Args:
+        url: URL string to validate
+
+    Returns:
+        bool: True if URL is valid, False otherwise
+    """
+    try:
+        result = urlparse(url)
+        return all([result.scheme, result.netloc])
+    except:
+        return False
 
 
 def add_scheme_if_needed(url):
-    """Add https:// scheme if no scheme is provided in the URL."""
-    parsed = urlparse(url)
-    if not parsed.scheme:
-        return f"https://{url}"
+    """Add http:// scheme if not present in URL.
+
+    Args:
+        url: URL string to check
+
+    Returns:
+        URL with scheme added if needed
+    """
+    if not url.startswith(("http://", "https://")):
+        return "http://" + url
     return url
 
 
 def fetch_webpage(url):
-    """Fetch webpage content from the provided URL."""
+    """Fetch webpage content from URL.
+
+    Args:
+        url: URL to fetch
+
+    Returns:
+        str: HTML content of webpage
+    """
     try:
-        response = httpx.get(url, follow_redirects=True)
+        response = requests.get(url)
         response.raise_for_status()
         return response.text
-    except httpx.RequestError as e:
-        raise Exception(f"Error fetching the webpage: {e}")
-    except httpx.HTTPStatusError as e:
-        raise Exception(f"HTTP error: {e}")
+    except requests.RequestException as e:
+        raise Exception(f"Error fetching {url}: {e}")
 
 
 def extract_links(html_content, base_url):
-    """Extract all links from the HTML content."""
+    """Extract all links from HTML content.
+
+    Args:
+        html_content: HTML content to parse
+        base_url: Base URL for resolving relative links
+
+    Returns:
+        list: List of (url, text) tuples
+    """
     soup = BeautifulSoup(html_content, "html.parser")
     links = []
 
-    # Extract base domain for filtering external links
-    base_domain = urlparse(base_url).netloc
-
-    for a_tag in soup.find_all("a", href=True):
-        href = a_tag.get("href")
+    for link in soup.find_all("a"):
+        href = link.get("href")
         if href:
-            # Skip javascript links, anchors, and other non-http links
-            if (
-                href.startswith("javascript:")
-                or href == "#"
-                or href.startswith("mailto:")
-            ):
+            # Skip fragment identifiers and javascript links
+            if href.startswith("#") or href.startswith("javascript:"):
                 continue
 
-            try:
-                # Convert relative URLs to absolute URLs
-                absolute_url = urljoin(base_url, href)
+            # Resolve relative URLs
+            absolute_url = urljoin(base_url, href)
 
-                # Check if the URL is valid
-                if not validate_url(absolute_url):
-                    continue
+            # Clean up the URL
+            absolute_url = re.sub(r"#.*$", "", absolute_url)  # Remove fragments
+            absolute_url = absolute_url.rstrip("/")  # Remove trailing slashes
 
-                # Check if the URL belongs to the same domain (filter external links)
-                url_domain = urlparse(absolute_url).netloc
-                if url_domain != base_domain:
-                    continue
+            # Get link text
+            text = link.get_text().strip()
+            if not text:
+                text = link.get("title", "").strip()
+            if not text:
+                text = href
 
-                link_text = a_tag.get_text(strip=True) or "[No text]"
-                links.append((absolute_url, link_text))
-            except Exception:
-                # Skip any links that cause errors when parsing
-                continue
+            links.append((absolute_url, text))
 
     return links
-
-
-def fetch_page_content(url):
-    """Fetch the content of a webpage and extract title, text, and images.
-    
-    Args:
-        url: The URL of the webpage to fetch.
-        
-    Returns:
-        A dictionary containing the page title, content text, and a list of image URLs.
-    """
-    try:
-        response = httpx.get(url, follow_redirects=True)
-        response.raise_for_status()
-        html_content = response.text
-        
-        soup = BeautifulSoup(html_content, "html.parser")
-        
-        # Extract title
-        title = soup.title.string if soup.title else "[No title]"
-        
-        # Extract main content (simplified approach)
-        # Remove script and style elements
-        for script in soup(["script", "style"]):
-            script.extract()
-            
-        # Get text content
-        text = soup.get_text(separator="\n", strip=True)
-        
-        # Extract images
-        images = []
-        for img in soup.find_all("img", src=True):
-            img_src = img.get("src")
-            if img_src:
-                # Convert relative URLs to absolute URLs
-                absolute_img_url = urljoin(url, img_src)
-                images.append(absolute_img_url)
-        
-        return {
-            "title": title,
-            "content": text,
-            "images": images
-        }
-    except Exception as e:
-        print(f"Error fetching page content: {e}")
-        return {
-            "title": "[Error]",
-            "content": f"Error fetching content: {e}",
-            "images": []
-        }
-
-def download_image(image_url, save_path):
-    """Download an image from a URL and save it to the specified path.
-    
-    Args:
-        image_url: The URL of the image to download.
-        save_path: The path where the image should be saved.
-        
-    Returns:
-        The local path to the saved image, or None if download failed.
-    """
-    try:
-        response = httpx.get(image_url, follow_redirects=True)
-        response.raise_for_status()
-        
-        # Create directory if it doesn't exist
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        
-        # Save the image
-        with open(save_path, "wb") as f:
-            f.write(response.content)
-            
-        return save_path
-    except Exception as e:
-        print(f"Error downloading image {image_url}: {e}")
-        return None
 
 
 def display_links(links, include_text=True):

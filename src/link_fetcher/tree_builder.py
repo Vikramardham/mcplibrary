@@ -4,55 +4,49 @@ Tree Builder - A module to organize website links into a meaningful tree structu
 
 import os
 import json
+from pathlib import Path
 from urllib.parse import urlparse
-from treelib import Tree
+from rich.tree import Tree as RichTree
 from rich.console import Console
-from rich.panel import Panel
 from rich.text import Text
-import google.generativeai as genai
+from rich.panel import Panel
+from rich.table import Table
+from rich.markdown import Markdown
+from trafilatura import fetch_url, extract, extract_metadata
 from dotenv import load_dotenv
-from ..link_fetcher.fetcher import fetch_page_content, download_image
+from google import genai
+from treelib import Tree
+from .fetcher import validate_url
 
 # Load environment variables from .env file
 load_dotenv()
 
+
 class WebsiteTreeBuilder:
-    """Builds a tree structure of website links using LLM categorization."""
+    """Build and analyze a tree structure from website links."""
 
     def __init__(self, api_key=None):
-        """Initialize the tree builder with optional API key for Google Generative AI."""
-        self.conventional_tree = Tree()
-        self.llm_tree = Tree()
+        """Initialize the tree builder.
+
+        Args:
+            api_key: Optional Google API key for LLM categorization
+        """
         self.console = Console()
-
-        # Create root nodes for both trees
-        self.conventional_tree.create_node("Root", "root")
-        self.llm_tree.create_node("Root", "root")
-
-        # Initialize Google Generative AI client
-        self.genai_client = None
-
-        # Priority for API key:
-        # 1. Explicitly provided api_key parameter
-        # 2. GEMINI_API_KEY from .env file or environment
-        # 3. GOOGLE_API_KEY from environment
-        if api_key:
-            self.genai_client = genai.Client(api_key=api_key)
-            self.console.print("[green]Using provided API key.[/green]")
-        elif os.environ.get("GEMINI_API_KEY"):
-            self.genai_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
-            self.console.print("[green]Using GEMINI_API_KEY from environment.[/green]")
-        elif os.environ.get("GOOGLE_API_KEY"):
-            self.genai_client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
-            self.console.print("[green]Using GOOGLE_API_KEY from environment.[/green]")
-        else:
-            self.console.print(
-                "[bold red]Error: No API key found. Please add GEMINI_API_KEY to your .env file.[/bold red]"
-            )
-            raise ValueError("Missing API key - add GEMINI_API_KEY to your .env file")
+        self.conventional_tree = None
+        self.llm_tree = None
+        self.all_links = []
 
     def analyze_links(self, links, base_url):
         """Analyze and categorize links using both conventional and LLM approaches."""
+
+        # Initialize both trees with root nodes
+        self.conventional_tree = Tree()
+        self.conventional_tree.create_node(
+            "Website Structure", "root", data={"type": "root"}
+        )
+
+        self.llm_tree = Tree()
+        self.llm_tree.create_node("Enhanced Structure", "root", data={"type": "root"})
 
         # First, group links by their domain and path
         domains = {}
@@ -172,12 +166,16 @@ class WebsiteTreeBuilder:
             3. Include ALL links in your categorization
             4. Create up to 3 levels of hierarchy (categories, subcategories, sub-subcategories)
             5. Output ONLY valid JSON, no explanations or markdown
-            """ % (base_url, json.dumps(link_data, indent=2))
+            """ % (
+                base_url,
+                json.dumps(link_data, indent=2),
+            )
 
             try:
-                # Using the new client approach to generate content
-                response = self.genai_client.models.generate_content(
-                    model="gemini-1.5-pro",
+                # Using the correct client approach to generate content
+                client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+                response = client.models.generate_content(
+                    model="gemini-2.0-flash",
                     contents=prompt,
                 )
 
@@ -319,12 +317,16 @@ class WebsiteTreeBuilder:
                                         "type": "link",
                                     },
                                 )
-                                
+
                         # Handle sub-subcategories (third level)
-                        for idx, subsubcat in enumerate(subcat.get("subcategories", [])):
-                            subsubcat_name = subsubcat.get("name", f"Sub-subcategory {idx+1}")
+                        for idx, subsubcat in enumerate(
+                            subcat.get("subcategories", [])
+                        ):
+                            subsubcat_name = subsubcat.get(
+                                "name", f"Sub-subcategory {idx+1}"
+                            )
                             subsubcat_id = f"{subcat_id}_subcat_{idx}"
-                            
+
                             # Add sub-subcategory to tree
                             tree.create_node(
                                 subsubcat_name,
@@ -335,13 +337,13 @@ class WebsiteTreeBuilder:
                                     "type": "category",
                                 },
                             )
-                            
+
                             # Add links to the sub-subcategory
                             for m, subsublink in enumerate(subsubcat.get("links", [])):
                                 subsublink_url = subsublink.get("url")
                                 subsublink_text = subsublink.get("text")
                                 subsublink_importance = subsublink.get("importance", 3)
-                                
+
                                 if subsublink_url:
                                     subsublink_id = f"{subsubcat_id}_link_{m}"
                                     tree.create_node(
@@ -437,6 +439,41 @@ class WebsiteTreeBuilder:
 
     def display_tree(self):
         """Display both conventional and LLM-enhanced tree structures."""
+
+        def convert_to_rich_tree(tree, title):
+            """Convert a treelib Tree to a rich Tree for display."""
+            rich_tree = RichTree(title)
+
+            def add_node_to_rich_tree(node, parent_rich_node):
+                node_data = node.data or {}
+                node_type = node_data.get("type", "unknown")
+
+                if node_type == "category":
+                    text = f"📁 {node.tag}"
+                    if node_data.get("description"):
+                        text += f" - {node_data['description']}"
+                    new_node = parent_rich_node.add(text)
+                elif node_type == "link":
+                    text = f"🔗 {node.tag}"
+                    if "url" in node_data:
+                        text += f"\n   {node_data['url']}"
+                    new_node = parent_rich_node.add(text)
+                else:
+                    new_node = parent_rich_node.add(node.tag)
+
+                # Add children recursively
+                for child in tree.children(node.identifier):
+                    add_node_to_rich_tree(child, new_node)
+
+                return new_node
+
+            # Start from root's children to skip the root node itself
+            root = tree.get_node(tree.root)
+            for child in tree.children(root.identifier):
+                add_node_to_rich_tree(child, rich_tree)
+
+            return rich_tree
+
         # Display conventional tree
         self.console.print(
             "\n[bold blue on white]==================== CONVENTIONAL TREE (URL-BASED) ====================[/bold blue on white]"
@@ -444,7 +481,10 @@ class WebsiteTreeBuilder:
         self.console.print(
             "[dim]This tree organizes links based on their URL structure and paths.[/dim]"
         )
-        self.conventional_tree.show(key=lambda node: node.identifier)
+        conv_rich_tree = convert_to_rich_tree(
+            self.conventional_tree, "Website Structure"
+        )
+        self.console.print(conv_rich_tree)
 
         # Display LLM tree
         self.console.print(
@@ -453,7 +493,8 @@ class WebsiteTreeBuilder:
         self.console.print(
             "[dim]This tree uses AI to organize links based on their meaning and purpose.[/dim]"
         )
-        self.llm_tree.show(key=lambda node: node.identifier)
+        llm_rich_tree = convert_to_rich_tree(self.llm_tree, "Enhanced Structure")
+        self.console.print(llm_rich_tree)
 
         # Display rich versions with more details
         self.console.print(
@@ -583,21 +624,21 @@ class WebsiteTreeBuilder:
             output_dir = os.path.dirname(base_filename)
             if not output_dir:
                 output_dir = "output"
-        
+
         # Create output directory if it doesn't exist
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
-        
+
         # Create images directory
         images_dir = os.path.join(output_dir, "images")
         if not os.path.exists(images_dir):
             os.makedirs(images_dir)
-        
+
         # Update base_filename to include the website-specific directory
         if base_url:
             base_name = os.path.basename(base_filename)
             base_filename = os.path.join(output_dir, base_name)
-        
+
         # Save conventional tree - standard format
         conv_file = f"{base_filename}_conventional.txt"
         with open(conv_file, "w", encoding="utf-8") as f:
@@ -686,71 +727,62 @@ class WebsiteTreeBuilder:
 
             # Capture tree nodes
             self._save_rich_tree_to_file(self.llm_tree, file_console)
-            
+
         # Save CSV with rich content
         self.console.print("[bold]Fetching page content and images...[/bold]")
         csv_file = f"{base_filename}_content.csv"
-        
+
         # Collect all unique URLs from both trees
         all_urls = set()
-        
+
         def collect_urls_from_tree(tree, node_id="root"):
             node = tree.get_node(node_id)
             if node.data and node.data.get("type") == "link" and "url" in node.data:
                 all_urls.add(node.data["url"])
-            
+
             for child_id in tree.is_branch(node_id):
                 collect_urls_from_tree(tree, child_id)
-        
+
         # Collect URLs from both trees
         collect_urls_from_tree(self.conventional_tree)
         collect_urls_from_tree(self.llm_tree)
-        
+
         # Write CSV header
         with open(csv_file, "w", newline="", encoding="utf-8") as f:
             csv_writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
-            csv_writer.writerow(["Page Title", "URL", "Content", "Images"])
-            
+            csv_writer.writerow(["Page Title", "URL", "Content"])
+
             # Process each URL
             for url in all_urls:
                 self.console.print(f"Processing: {url}")
-                
-                # Fetch page content
-                page_data = fetch_page_content(url)
-                
-                # Download and save images
-                image_paths = []
-                for img_url in page_data["images"]:
-                    # Create a unique filename for the image based on its URL
-                    img_hash = hashlib.md5(img_url.encode()).hexdigest()
-                    img_ext = os.path.splitext(urlparse(img_url).path)[1] or ".jpg"
-                    img_filename = f"{img_hash}{img_ext}"
-                    img_path = os.path.join(images_dir, img_filename)
-                    
-                    # Download the image
-                    local_path = download_image(img_url, img_path)
-                    if local_path:
-                        # Store relative path to the image
-                        rel_path = os.path.join("images", img_filename)
-                        image_paths.append(rel_path)
-                
-                # Write page data to CSV
-                csv_writer.writerow([
-                    page_data["title"],
-                    url,
-                    page_data["content"][:1000],  # Limit content length
-                    ", ".join(image_paths)
-                ])
-        
+
+                # Fetch page content using trafilatura
+                downloaded = fetch_url(url)
+                if downloaded:
+                    content = extract(
+                        downloaded, output_format="markdown", include_images=True
+                    )
+                    metadata = extract_metadata(downloaded)
+                    title = metadata.title if metadata else url
+
+                    # Write page data to CSV
+                    csv_writer.writerow(
+                        [
+                            title,
+                            url,
+                            content[:1000] if content else "",  # Limit content length
+                        ]
+                    )
+
         self.console.print("[bold green]Output saved to:[/bold green]")
         self.console.print("- Conventional tree: [blue]%s[/blue]" % conv_file)
         self.console.print("- Enhanced tree: [blue]%s[/blue]" % llm_file)
         self.console.print("- Rich formatted trees: [blue]%s[/blue]" % rich_file)
-        self.console.print("- CSV content with images: [blue]%s[/blue]" % csv_file)
-        self.console.print("- Images saved to: [blue]%s[/blue]" % images_dir)
+        self.console.print("- CSV content: [blue]%s[/blue]" % csv_file)
 
     def _save_rich_tree_to_file(self, tree, file_console):
         """Save a rich tree to a file using the provided console."""
+
         # Define a recursive function to traverse the tree
         def traverse_tree_for_file(node_id, level):
             node = tree.get_node(node_id)
@@ -766,12 +798,14 @@ class WebsiteTreeBuilder:
                     # Link node - show URL and description
                     url = node.data.get("url", "")
                     description = node.data.get("description", "")
-                    
+
                     if description:
-                        file_console.print(f"{indent}[blue]{node.tag}[/blue]: {description}")
+                        file_console.print(
+                            f"{indent}[blue]{node.tag}[/blue]: {description}"
+                        )
                     else:
                         file_console.print(f"{indent}[blue]{node.tag}[/blue]")
-                    
+
                     file_console.print(f"{indent}  [dim]{url}[/dim]")
                 else:
                     # Generic node
@@ -785,145 +819,159 @@ class WebsiteTreeBuilder:
         traverse_tree_for_file("root", 0)
 
     def retrieve_relevant_urls(self, query, include_content=False, max_results=5):
-        """Retrieve the most relevant URLs for a given query using LLM.
-        
+        """Retrieve URLs relevant to a specific query using LLM.
+
         Args:
-            query (str): The user query to find relevant URLs for
-            include_content (bool): Whether to include page content in the results
-            max_results (int): Maximum number of results to return
-            
-        Returns:
-            list: List of relevant URLs or dictionaries with URL and content
+            query: The search query
+            include_content: Whether to include page content in the results
+            max_results: Maximum number of results to return
         """
-        
-        self.console.print(f"[bold]Finding relevant URLs for query: [/bold][cyan]{query}[/cyan]")
-        
-        # Check if we have any links to search through
-        if not self.links:
-            self.console.print("[yellow]No links to search through. Please analyze links first.[/yellow]")
-            return []
-            
-        # Prepare the prompt for the LLM
-        prompt = """
-        I have a collection of URLs from a website. I need to find the most relevant URLs for the following query:
-        
-        QUERY: %s
-        
-        Here are the available URLs with their titles:
-        
-        """ % query
-        
-        # Add the URLs to the prompt (limit to 50 to avoid token limits)
-        for i, (url, text) in enumerate(self.links[:50]):
-            prompt += f"{i+1}. {url} - {text}\n"
-            
-        prompt += """
-        Please return a JSON object with a 'relevant_urls' array containing the most relevant URLs (up to %d) for the query.
-        Each item in the array should be an object with 'url' and 'relevance_score' (0-100) fields.
-        
-        Example response format:
-        {
-            "relevant_urls": [
-                {"url": "https://example.com/page1", "relevance_score": 95},
-                {"url": "https://example.com/page2", "relevance_score": 85}
-            ]
-        }
-        
-        Only return the JSON object, nothing else.
-        """ % max_results
-        
         try:
-            # Configure the model
-            model = genai.GenerativeModel(
-                model_name="gemini-pro",
-                generation_config={
-                    "temperature": 0.2,
-                    "top_p": 0.95,
-                    "top_k": 40,
-                    "max_output_tokens": 2048,
-                },
-                safety_settings=[
-                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                ],
-            )
-            
-            # Generate the response
-            response = model.generate_content(prompt)
-            content = response.text
-            
-            # Parse the JSON response
-            try:
-                result_data = json.loads(content)
-            except json.JSONDecodeError as json_error:
-                self.console.print(f"[yellow]JSON parsing error: {json_error}. Trying fallback parsing...[/yellow]")
-                
-                # Try to find and extract just the JSON part
-                import re
-                
-                json_match = re.search(r'(\{.*"relevant_urls"\s*:\s*\[.*?\]\s*\})', content, re.DOTALL)
-                if json_match:
-                    try:
-                        result_data = json.loads(json_match.group(1))
-                    except json.JSONDecodeError:
-                        self.console.print("[red]Failed to parse JSON after fallback attempt.[/red]")
-                        return []
-                else:
-                    self.console.print("[red]Could not find JSON data in the response.[/red]")
-                    return []
-            
-            # Check if we have any relevant URLs
-            if "relevant_urls" not in result_data or not result_data["relevant_urls"]:
-                self.console.print("[yellow]No relevant URLs found for the query.[/yellow]")
-                return []
-                
-            # Process the results
-            relevant_urls = []
-            for item in result_data["relevant_urls"][:max_results]:
-                url = item.get("url")
-                score = item.get("relevance_score", 0)
-                
-                if not url:
-                    continue
-                    
-                # If include_content is True, fetch the content
+            # Prepare the data for querying
+            urls_with_content = []
+            for url, text in self.all_links:
                 if include_content:
                     try:
-                        page_data = fetch_page_content(url)
-                        relevant_urls.append({
-                            "url": url,
-                            "title": page_data.get("title", "No title"),
-                            "content": page_data.get("content", "No content"),
-                            "relevance_score": score
-                        })
+                        page_data = self._fetch_page_content(url)
+                        urls_with_content.append(
+                            {
+                                "url": url,
+                                "text": text,
+                                "title": page_data["title"],
+                                "content": page_data["content"],
+                            }
+                        )
                     except Exception as e:
-                        self.console.print(f"[yellow]Error fetching content for {url}: {e}[/yellow]")
-                        relevant_urls.append({
-                            "url": url,
-                            "relevance_score": score
-                        })
+                        self.console.print(
+                            f"[yellow]Warning: Could not fetch content from {url}: {e}[/yellow]"
+                        )
+                        continue
                 else:
-                    relevant_urls.append({
-                        "url": url,
-                        "relevance_score": score
-                    })
-            
-            # Display the results
-            if relevant_urls:
-                table = Panel(
-                    "\n".join([
-                        f"[cyan]{i+1}. {item.get('url')} [/cyan][green](Score: {item.get('relevance_score')})[/green]"
-                        for i, item in enumerate(relevant_urls)
-                    ]),
-                    title="[bold]Relevant URLs[/bold]",
-                    expand=False
+                    urls_with_content.append({"url": url, "text": text})
+
+            # Create a prompt for the LLM
+            prompt = f"""Given the following URLs and their descriptions, identify the {max_results} most relevant ones for answering this query: "{query}"
+
+URLs:
+{json.dumps(urls_with_content, indent=2)}
+
+Respond with ONLY a JSON array of objects containing 'url' and 'relevance_score' (0-100). Sort by relevance_score in descending order. Include only the top {max_results} most relevant URLs."""
+
+            # Get model response
+            client = genai.Client()
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt,
+            )
+
+            # Parse the response
+            try:
+                results = json.loads(response.text)
+                if not isinstance(results, list):
+                    raise ValueError("Response is not a list")
+            except json.JSONDecodeError:
+                raise ValueError("Could not parse LLM response as JSON")
+
+            # Sort by relevance score and limit to max_results
+            results.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
+            results = results[:max_results]
+
+            # Create a tree with the results
+            result_tree = Tree()
+            result_tree.create_node("Search Results", "root", data={"type": "root"})
+
+            for i, result in enumerate(results):
+                url = result["url"]
+                score = result.get("relevance_score", 0)
+
+                # Find the link text for this URL
+                link_text = next(
+                    (text for u, text in self.all_links if u == url),
+                    "No description",
                 )
-                self.console.print(table)
-                
-            return relevant_urls
-            
+
+                # Create a node for this result
+                result_id = f"result_{i}"
+                result_tree.create_node(
+                    link_text,
+                    result_id,
+                    parent="root",
+                    data={
+                        "type": "link",
+                        "url": url,
+                        "score": score,
+                    },
+                )
+
+            # Store the tree
+            self.llm_tree = result_tree
+
+            # Display the results using rich tree
+            rich_tree = RichTree("[bold]Search Results[/bold]")
+            for node in result_tree.children(result_tree.root):
+                node_data = node.data
+                score = node_data.get("score", 0)
+                url = node_data.get("url", "")
+                result_node = rich_tree.add(
+                    f"[bold]{node.tag}[/bold] [dim](Score: {score})[/dim]"
+                )
+                result_node.add(f"[link={url}]{url}[/link]")
+
+            self.console.print(rich_tree)
+
         except Exception as e:
             self.console.print(f"[red]Error retrieving relevant URLs: {e}[/red]")
             return []
+
+    def _fetch_page_content(self, url):
+        """Fetch and extract content from a webpage using trafilatura.
+
+        Args:
+            url: URL to fetch content from
+
+        Returns:
+            dict: Dictionary containing page title, content, and images
+        """
+        try:
+            downloaded = fetch_url(url)
+            result = extract(
+                downloaded,
+                include_comments=True,
+                include_tables=True,
+                include_links=True,
+                include_images=True,
+                include_formatting=True,
+                output_format="markdown",
+                with_metadata=True,
+                url=url,
+            )
+
+            if not result:
+                raise Exception("Failed to extract content")
+
+            # Parse the metadata from the result
+            lines = result.split("\n")
+            metadata = {}
+            content_start = 0
+
+            # Look for metadata section
+            if lines[0].startswith("---"):
+                for i, line in enumerate(lines[1:], 1):
+                    if line.startswith("---"):
+                        content_start = i + 1
+                        break
+                    if ":" in line:
+                        key, value = line.split(":", 1)
+                        metadata[key.strip()] = value.strip()
+
+            # Extract content after metadata
+            content = "\n".join(lines[content_start:])
+
+            return {
+                "title": metadata.get("title", "Untitled"),
+                "content": content,
+                "images": [],  # Images are already included in the markdown content
+            }
+
+        except Exception as e:
+            raise Exception(f"Error fetching content from {url}: {e}")
