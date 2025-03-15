@@ -7,8 +7,13 @@ A Python library that crawls documentation websites and builds a tree structure 
 - Crawls documentation websites starting from a root URL
 - Extracts title and content from each page
 - Builds a hierarchical tree structure based on URL paths
+- Creates website-specific output directories for better organization
+- Generates up to 3 levels of hierarchy in the LLM tree (categories, subcategories, and sub-subcategories)
+- Outputs rich content in CSV format with columns for page, URL, content, and images
+- Downloads and saves images separately in a designated sub-folder
+- Provides a retriever function that uses LLMs to fetch relevant URLs based on user questions
 - Filters URLs based on patterns to focus on relevant content
-- Saves results as JSON for easy integration with other tools
+- Saves results in multiple formats for easy integration with other tools
 
 ## Installation
 
@@ -37,6 +42,33 @@ crawler.save_tree("docs_tree.json")
 crawler.save_pages("docs_pages.json")
 ```
 
+### Command Line Interface
+
+You can run the crawler from the command line:
+
+```bash
+python -m src.link_fetcher https://docs.python.org/3/library/ --output tree --save-to python_docs
+```
+
+This will create the following files in a website-specific output directory:
+- `python_docs_conventional.txt`: Tree based on URL structure
+- `python_docs_llm.txt`: Tree based on AI categorization
+- `python_docs_rich.txt`: Detailed tree views with descriptions
+- `python_docs_content.csv`: CSV file with page content and image references
+- Images folder with downloaded images
+
+### Using the Retriever Function
+
+You can use the retriever function to find relevant URLs for a specific query:
+
+```bash
+python -m src.link_fetcher https://docs.python.org/3/library/ --query "How do I use dictionaries in Python?"
+```
+
+Additional options:
+- `--include-content`: Include page content in query results
+- `--max-results N`: Limit the number of results (default: 5)
+
 ### Loading Saved Results
 
 ```python
@@ -56,21 +88,6 @@ page_url = "https://docs.python.org/3/library/functions.html"
 if page_url in pages:
     page_title = pages[page_url]["title"]
     page_content = pages[page_url]["content"]
-```
-
-### Command Line Interface
-
-You can run the crawler from the command line:
-
-```bash
-python src/map.py https://docs.python.org/3/library/ --max-pages 50 --output python_docs.json
-```
-
-Or try the example script:
-
-```bash
-python src/example.py  # Crawl a site
-python src/example.py --load  # Load previously saved results
 ```
 
 ## Tree Structure
@@ -100,6 +117,14 @@ The generated tree has the following structure:
 }
 ```
 
+## CSV Content Format
+
+The CSV content file has the following columns:
+- Page Title: The title of the webpage
+- URL: The full URL of the page
+- Content: The main text content of the page
+- Images: Comma-separated list of relative paths to downloaded images
+
 ## Customization
 
 You can customize the crawler behavior:
@@ -124,9 +149,8 @@ crawler = WebsiteTreeCrawler(
 This library is the first step in building a comprehensive solution for LLM context retrieval. Future enhancements will include:
 
 1. Vector embeddings for semantic search
-2. LLM-friendly retrieval interface
-3. Content chunking strategies
-4. Improved content extraction for specific documentation formats
+2. Content chunking strategies
+3. Improved content extraction for specific documentation formats
 
 ## License
 

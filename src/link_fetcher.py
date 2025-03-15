@@ -1,31 +1,43 @@
 #!/usr/bin/env python3
 """
-Link Fetcher - A CLI tool to fetch all links from a webpage.
-Wrapper script for direct invocation.
+Link Fetcher - A script to fetch all links from a webpage.
 """
 
 import sys
 import argparse
-import os
-from urllib.parse import urlparse
+from rich.console import Console
+from rich.table import Table
 
-# Import dotenv for loading environment variables from .env file (required)
-from dotenv import load_dotenv
+# Use absolute imports instead of relative imports
+from src.link_fetcher.fetcher import (
+    validate_url,
+    fetch_webpage,
+    extract_links,
+    add_scheme_if_needed,
+)
+from src.link_fetcher.tree_builder import WebsiteTreeBuilder
 
-# Load environment variables from .env file
-load_dotenv()
+def display_links(links, include_text=True):
+    """Display links in a table format.
 
-# Import the functionality from our main module
-from link_fetcher.main import validate_url, fetch_webpage, extract_links, display_links
-from link_fetcher.tree_builder import WebsiteTreeBuilder
+    Args:
+        links: List of (url, text) tuples.
+        include_text: Whether to include link text in the output.
+    """
+    console = Console()
+    table = Table(show_header=True, header_style="bold magenta")
+    table.add_column("URL", style="dim", width=100)
 
+    if include_text:
+        table.add_column("Text", style="green")
 
-def add_scheme_if_needed(url):
-    """Add http:// scheme if no scheme is provided in the URL."""
-    parsed = urlparse(url)
-    if not parsed.scheme:
-        return f"https://{url}"
-    return url
+    for link in links:
+        if include_text:
+            table.add_row(link[0], link[1])
+        else:
+            table.add_row(link[0])
+
+    console.print(table)
 
 
 def main():
@@ -49,6 +61,21 @@ def main():
         "--save-to",
         help="Save output to files with this base filename (will append _conventional.txt, _llm.txt, etc.)",
     )
+    parser.add_argument(
+        "--query",
+        help="Retrieve relevant URLs for a specific query using LLM",
+    )
+    parser.add_argument(
+        "--include-content",
+        action="store_true",
+        help="Include page content in query results (only applicable with --query)",
+    )
+    parser.add_argument(
+        "--max-results",
+        type=int,
+        default=5,
+        help="Maximum number of results to return for a query (only applicable with --query)",
+    )
 
     args = parser.parse_args()
 
@@ -56,13 +83,9 @@ def main():
     url = add_scheme_if_needed(args.url)
 
     if not validate_url(url):
-        from rich.console import Console
-
         console = Console()
         console.print(f"[bold red]Invalid URL: {url}[/bold red]")
         sys.exit(1)
-
-    from rich.console import Console
 
     console = Console()
 
@@ -78,7 +101,7 @@ def main():
 
         console.print(f"[bold green]Found {len(links)} links.[/bold green]")
 
-        if args.output == "tree":
+        if args.output == "tree" or args.query:
             # Create a tree builder
             try:
                 api_key = args.api_key
@@ -88,13 +111,27 @@ def main():
                 console.print("[bold]Analyzing and categorizing links...[/bold]")
                 tree_builder.analyze_links(links, url)
 
-                # Display both trees
-                tree_builder.display_tree()
+                # If query is provided, retrieve relevant URLs
+                if args.query:
+                    console.print(f"\n[bold]Retrieving relevant URLs for query: [/bold][cyan]{args.query}[/cyan]")
+                    tree_builder.retrieve_relevant_urls(
+                        args.query, 
+                        include_content=args.include_content,
+                        max_results=args.max_results
+                    )
+                    
+                    # If we're not displaying the tree, we can exit here
+                    if args.output != "tree":
+                        sys.exit(0)
+                
+                # Display both trees if output is tree
+                if args.output == "tree":
+                    tree_builder.display_tree()
 
-                # Save to files if requested
-                if args.save_to:
-                    console.print(f"\n[bold]Saving output to files...[/bold]")
-                    tree_builder.save_to_files(args.save_to)
+                    # Save to files if requested
+                    if args.save_to:
+                        console.print("\n[bold]Saving output to files...[/bold]")
+                        tree_builder.save_to_files(args.save_to, url)
 
             except ValueError as e:
                 console.print(f"[bold red]Error: {e}[/bold red]")
