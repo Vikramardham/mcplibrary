@@ -4,6 +4,14 @@ Tree Builder - A module to organize website links into a meaningful tree structu
 
 import os
 import json
+import asyncio
+import aiohttp
+import time
+import multiprocessing
+import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+from functools import partial
+from itertools import islice
 from pathlib import Path
 from urllib.parse import urlparse
 from rich.tree import Tree as RichTree
@@ -16,37 +24,164 @@ from trafilatura import fetch_url, extract, extract_metadata
 from dotenv import load_dotenv
 from google import genai
 from treelib import Tree
+from tqdm import tqdm
 from .fetcher import validate_url
 
 # Load environment variables from .env file
 load_dotenv()
 
+# Maximum number of concurrent downloads per process
+MAX_CONCURRENT_DOWNLOADS = 8
+
+# Number of processes to use (default to CPU count - 1, minimum 1)
+NUM_PROCESSES = max(1, multiprocessing.cpu_count() - 1)
+
+# Chunk size for parallel processing
+CHUNK_SIZE = 3  # URLs per chunk
+
+
+def chunk_list(lst, size):
+    """Split a list into chunks of specified size."""
+    for i in range(0, len(lst), size):
+        yield list(islice(lst, i, i + size))
+
+
+async def process_chunk_async(chunk_urls):
+    """Process a chunk of URLs asynchronously."""
+    async with aiohttp.ClientSession() as session:
+        tasks = []
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
+
+        async def fetch_with_semaphore(url):
+            try:
+                async with semaphore:
+                    async with session.get(url) as response:
+                        if response.status == 200:
+                            content = await response.text()
+                            if content:
+                                extracted = extract(
+                                    content,
+                                    output_format="markdown",
+                                    include_images=True,
+                                )
+                                metadata = extract_metadata(content)
+                                title = metadata.title if metadata else url
+                                return {
+                                    "url": url,
+                                    "title": title,
+                                    "content": extracted if extracted else "",
+                                }
+            except Exception:
+                pass
+            return None
+
+        for url in chunk_urls:
+            task = asyncio.create_task(fetch_with_semaphore(url))
+            tasks.append(task)
+
+        results = await asyncio.gather(*tasks)
+        return [r for r in results if r is not None]
+
+
+def process_chunk(chunk_urls):
+    """Process a chunk of URLs in a separate process."""
+    return asyncio.run(process_chunk_async(chunk_urls))
+
+
+def parallel_fetch_content(urls):
+    """Fetch content from URLs using parallel processing and async IO."""
+    start_time = time.time()
+    total_urls = len(urls)
+
+    print(
+        f"\nExtracting content from {total_urls} URLs using {NUM_PROCESSES} processes..."
+    )
+
+    # Split URLs into chunks
+    url_chunks = list(chunk_list(urls, CHUNK_SIZE))
+    total_chunks = len(url_chunks)
+
+    # Create progress bar
+    progress = tqdm(total=total_urls, desc="Fetching content", unit="pages")
+
+    results = []
+    with ProcessPoolExecutor(max_workers=NUM_PROCESSES) as executor:
+        # Submit all chunks for processing
+        future_to_chunk = {
+            executor.submit(process_chunk, chunk): chunk for chunk in url_chunks
+        }
+
+        # Process completed chunks
+        for future in concurrent.futures.as_completed(future_to_chunk):
+            chunk_results = future.result()
+            results.extend(chunk_results)
+            progress.update(len(chunk_results))
+            if chunk_results:
+                progress.set_postfix_str(f"Last: {chunk_results[-1]['title'][:30]}...")
+
+    progress.close()
+
+    # Calculate statistics
+    end_time = time.time()
+    successful_fetches = len(results)
+    failed_fetches = total_urls - successful_fetches
+    total_time = end_time - start_time
+
+    print(f"\nContent extraction completed in {total_time:.2f} seconds")
+    print(f"Successfully fetched: {successful_fetches} pages")
+    if failed_fetches > 0:
+        print(f"Failed to fetch: {failed_fetches} pages")
+    print(f"Average time per page: {total_time/total_urls:.2f} seconds")
+    print(f"Processing speed: {successful_fetches/total_time:.2f} pages/second")
+
+    return results
+
 
 class WebsiteTreeBuilder:
     """Build and analyze a tree structure from website links."""
 
-    def __init__(self, api_key=None):
+    def __init__(self, api_key=None, use_llm=False):
         """Initialize the tree builder.
 
         Args:
             api_key: Optional Google API key for LLM categorization
+            use_llm: Whether to use LLM for categorization (default: False)
         """
         self.console = Console()
         self.conventional_tree = None
         self.llm_tree = None
         self.all_links = []
+        self.use_llm = use_llm
+
+        # Configure Google Generative AI only if LLM is enabled
+        if use_llm:
+            if api_key:
+                genai.configure(api_key=api_key)
+            elif os.getenv("GEMINI_API_KEY"):
+                genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+            else:
+                raise ValueError(
+                    "No API key provided. Please provide an API key or set GEMINI_API_KEY environment variable."
+                )
 
     def analyze_links(self, links, base_url):
-        """Analyze and categorize links using both conventional and LLM approaches."""
+        """Analyze and categorize links using both conventional and LLM approaches.
+
+        Args:
+            links: List of (url, text) tuples to analyze
+            base_url: Base URL of the website being analyzed
+
+        Returns:
+            dict: Dictionary containing both trees (conventional and optionally LLM-enhanced)
+        """
+        # Store all links for later use
+        self.all_links = links
 
         # Initialize both trees with root nodes
         self.conventional_tree = Tree()
         self.conventional_tree.create_node(
             "Website Structure", "root", data={"type": "root"}
         )
-
-        self.llm_tree = Tree()
-        self.llm_tree.create_node("Enhanced Structure", "root", data={"type": "root"})
 
         # First, group links by their domain and path
         domains = {}
@@ -74,11 +209,20 @@ class WebsiteTreeBuilder:
         )
         self._categorize_by_structure(domains, base_url, self.conventional_tree)
 
-        # Then generate the LLM-enhanced tree
-        self.console.print(
-            "[bold]Building enhanced tree using Google Generative AI...[/bold]"
-        )
-        self._categorize_with_llm(domains, base_url, self.llm_tree)
+        # Generate the LLM-enhanced tree only if enabled
+        if self.use_llm:
+            self.llm_tree = Tree()
+            self.llm_tree.create_node(
+                "Enhanced Structure", "root", data={"type": "root"}
+            )
+
+            self.console.print(
+                "[bold]Building enhanced tree using Google Generative AI...[/bold]"
+            )
+            self._categorize_with_llm(domains, base_url, self.llm_tree)
+        else:
+            # If LLM is not enabled, use the conventional tree for both
+            self.llm_tree = self.conventional_tree
 
         # Return both trees
         return {"conventional": self.conventional_tree, "llm": self.llm_tree}
@@ -486,15 +630,16 @@ class WebsiteTreeBuilder:
         )
         self.console.print(conv_rich_tree)
 
-        # Display LLM tree
-        self.console.print(
-            "\n[bold green on white]==================== ENHANCED TREE (AI-BASED) ====================[/bold green on white]"
-        )
-        self.console.print(
-            "[dim]This tree uses AI to organize links based on their meaning and purpose.[/dim]"
-        )
-        llm_rich_tree = convert_to_rich_tree(self.llm_tree, "Enhanced Structure")
-        self.console.print(llm_rich_tree)
+        # Display LLM tree only if it's different from conventional tree
+        if self.use_llm and self.llm_tree is not self.conventional_tree:
+            self.console.print(
+                "\n[bold green on white]==================== ENHANCED TREE (AI-BASED) ====================[/bold green on white]"
+            )
+            self.console.print(
+                "[dim]This tree uses AI to organize links based on their meaning and purpose.[/dim]"
+            )
+            llm_rich_tree = convert_to_rich_tree(self.llm_tree, "Enhanced Structure")
+            self.console.print(llm_rich_tree)
 
         # Display rich versions with more details
         self.console.print(
@@ -504,7 +649,12 @@ class WebsiteTreeBuilder:
         self._display_rich_tree(
             self.conventional_tree, "Conventional Website Structure (URL-based)"
         )
-        self._display_rich_tree(self.llm_tree, "Enhanced Website Structure (AI-based)")
+
+        # Display LLM tree details only if it's different from conventional tree
+        if self.use_llm and self.llm_tree is not self.conventional_tree:
+            self._display_rich_tree(
+                self.llm_tree, "Enhanced Website Structure (AI-based)"
+            )
 
     def _display_rich_tree(self, tree, title):
         """Display a more detailed tree with rich formatting."""
@@ -596,141 +746,104 @@ class WebsiteTreeBuilder:
         # Display the tree starting from root
         traverse_tree("root", 0)
 
-    def save_to_files(self, base_filename, base_url=None):
-        """Save both tree structures to files.
+    async def _fetch_url_async(self, session, url):
+        """Asynchronously fetch URL content using aiohttp."""
+        try:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    return await response.text()
+                return None
+        except Exception:
+            return None
 
-        Args:
-            base_filename: The base filename to use for output files.
-                           Will append _conventional.txt, _llm.txt, etc.
-            base_url: The base URL of the website being crawled.
-                      Used to create a website-specific directory.
-        """
-        from rich.console import Console
+    async def _process_url_async(self, url, session):
+        """Process a single URL asynchronously."""
+        try:
+            # Fetch content
+            downloaded = await self._fetch_url_async(session, url)
+            if downloaded:
+                content = extract(
+                    downloaded, output_format="markdown", include_images=True
+                )
+                metadata = extract_metadata(downloaded)
+                title = metadata.title if metadata else url
+                return {
+                    "url": url,
+                    "title": title,
+                    "content": content if content else "",
+                }
+            return None
+        except Exception:
+            return None
+
+    async def _fetch_all_content_async(self, urls):
+        """Fetch content from multiple URLs asynchronously."""
+        import time
+        from tqdm import tqdm
+
+        start_time = time.time()
+        print(f"\nExtracting content from {len(urls)} URLs...")
+
+        async with aiohttp.ClientSession() as session:
+            # Create tasks for all URLs with progress tracking
+            tasks = []
+            semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
+            progress = tqdm(total=len(urls), desc="Fetching content", unit="pages")
+
+            async def fetch_with_semaphore(url):
+                async with semaphore:
+                    result = await self._process_url_async(url, session)
+                    progress.update(1)
+                    if result:
+                        progress.set_postfix_str(f"Last: {result['title'][:30]}...")
+                    return result
+
+            for url in urls:
+                task = asyncio.create_task(fetch_with_semaphore(url))
+                tasks.append(task)
+
+            # Wait for all tasks to complete
+            results = await asyncio.gather(*tasks)
+            progress.close()
+
+            # Calculate statistics
+            end_time = time.time()
+            successful_fetches = len([r for r in results if r is not None])
+            failed_fetches = len(urls) - successful_fetches
+            total_time = end_time - start_time
+
+            print(f"\nContent extraction completed in {total_time:.2f} seconds")
+            print(f"Successfully fetched: {successful_fetches} pages")
+            if failed_fetches > 0:
+                print(f"Failed to fetch: {failed_fetches} pages")
+            print(f"Average time per page: {total_time/len(urls):.2f} seconds")
+
+            return [r for r in results if r is not None]
+
+    def save_to_files(self, base_filename, base_url=None):
+        """Save both tree structures to files."""
         import os
         from urllib.parse import urlparse
         import csv
-        import hashlib
         import sys
         import io
 
         # Create website-specific output directory
         if base_url:
-            # Extract domain from base_url to use as directory name
             domain = urlparse(base_url).netloc.replace(".", "_")
-            # Create output directory path
             output_dir = os.path.join("output", domain)
         else:
-            # Use the directory from base_filename if base_url is not provided
             output_dir = os.path.dirname(base_filename)
             if not output_dir:
                 output_dir = "output"
 
         # Create output directory if it doesn't exist
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-
-        # Create images directory
-        images_dir = os.path.join(output_dir, "images")
-        if not os.path.exists(images_dir):
-            os.makedirs(images_dir)
+        os.makedirs(output_dir, exist_ok=True)
 
         # Update base_filename to include the website-specific directory
         if base_url:
             base_name = os.path.basename(base_filename)
             base_filename = os.path.join(output_dir, base_name)
-
-        # Save conventional tree - standard format
-        conv_file = f"{base_filename}_conventional.txt"
-        with open(conv_file, "w", encoding="utf-8") as f:
-            # Create a file console that writes to the file
-            file_console = Console(file=f, width=120)
-
-            file_console.print(
-                "\n==================== CONVENTIONAL TREE (URL-BASED) ===================="
-            )
-            file_console.print(
-                "This tree organizes links based on their URL structure and paths."
-            )
-
-            # Capture tree output as string using a custom function
-            # We can't directly use file parameter with the Tree.show() method
-            # Use stdout redirection to capture the tree output
-            original_stdout = sys.stdout
-            string_io = io.StringIO()
-            sys.stdout = string_io
-
-            # Show the tree to the string buffer
-            self.conventional_tree.show(key=lambda node: node.identifier)
-
-            # Restore stdout and get the captured output
-            sys.stdout = original_stdout
-            tree_output = string_io.getvalue()
-
-            # Write the captured output to the file
-            file_console.print(tree_output)
-
-        # Save LLM tree - standard format
-        llm_file = f"{base_filename}_llm.txt"
-        with open(llm_file, "w", encoding="utf-8") as f:
-            # Create a file console that writes to the file
-            file_console = Console(file=f, width=120)
-
-            file_console.print(
-                "\n==================== ENHANCED TREE (AI-BASED) ===================="
-            )
-            file_console.print(
-                "This tree uses AI to organize links based on their meaning and purpose."
-            )
-
-            # Capture tree output as string
-            original_stdout = sys.stdout
-            string_io = io.StringIO()
-            sys.stdout = string_io
-
-            # Show the tree to the string buffer
-            self.llm_tree.show(key=lambda node: node.identifier)
-
-            # Restore stdout and get the captured output
-            sys.stdout = original_stdout
-            tree_output = string_io.getvalue()
-
-            # Write the captured output to the file
-            file_console.print(tree_output)
-
-        # Save rich formatted trees
-        rich_file = f"{base_filename}_rich.txt"
-        with open(rich_file, "w", encoding="utf-8") as f:
-            file_console = Console(file=f, width=120)
-
-            file_console.print(
-                "\n=== DETAILED TREE VIEWS (WITH DESCRIPTIONS AND FORMATTING) ==="
-            )
-
-            # Save conventional rich tree
-            title = "Conventional Website Structure (URL-based)"
-            explanation = (
-                "Links are grouped by their URL structure (directories and paths)"
-            )
-
-            file_console.print(f"\n{title}")
-            file_console.print(f"{explanation}\n")
-
-            # Capture tree nodes
-            self._save_rich_tree_to_file(self.conventional_tree, file_console)
-
-            # Save LLM rich tree
-            title = "Enhanced Website Structure (AI-based)"
-            explanation = "Links are organized by their purpose and content (using AI categorization)"
-
-            file_console.print(f"\n{title}")
-            file_console.print(f"{explanation}\n")
-
-            # Capture tree nodes
-            self._save_rich_tree_to_file(self.llm_tree, file_console)
-
-        # Save CSV with rich content
-        self.console.print("[bold]Fetching page content and images...[/bold]")
-        csv_file = f"{base_filename}_content.csv"
 
         # Collect all unique URLs from both trees
         all_urls = set()
@@ -739,84 +852,149 @@ class WebsiteTreeBuilder:
             node = tree.get_node(node_id)
             if node.data and node.data.get("type") == "link" and "url" in node.data:
                 all_urls.add(node.data["url"])
-
             for child_id in tree.is_branch(node_id):
                 collect_urls_from_tree(tree, child_id)
 
-        # Collect URLs from both trees
         collect_urls_from_tree(self.conventional_tree)
-        collect_urls_from_tree(self.llm_tree)
+        if self.use_llm and self.llm_tree is not self.conventional_tree:
+            collect_urls_from_tree(self.llm_tree)
 
-        # Write CSV header
+        # Sort URLs for consistent ordering
+        sorted_urls = sorted(all_urls)
+
+        # Fetch all content using parallel processing
+        results = parallel_fetch_content(sorted_urls)
+
+        # Create a mapping of URLs to their content
+        content_map = {result["url"]: result for result in results}
+
+        # Save merged content file for LLM context
+        merged_file = f"{base_filename}_merged_context.txt"
+        with open(merged_file, "w", encoding="utf-8") as f:
+            # Write header with website info
+            if base_url:
+                f.write(f"# Documentation for {base_url}\n\n")
+                f.write(
+                    "This document contains merged documentation from multiple pages of the website.\n"
+                )
+                f.write(
+                    "Each section is clearly marked with its title and source URL.\n"
+                )
+                f.write(
+                    "The content is formatted in Markdown for better readability.\n\n"
+                )
+                f.write("## Table of Contents\n\n")
+
+                # Create table of contents
+                for url in sorted_urls:
+                    if url in content_map:
+                        result = content_map[url]
+                        clean_title = result["title"].replace("\n", " ").strip()
+                        f.write(f"- [{clean_title}](#{url})\n")
+
+                f.write("\n## Content\n\n")
+
+            # Write content sections
+            for url in sorted_urls:
+                if url in content_map:
+                    result = content_map[url]
+
+                    # Write section markers
+                    f.write(f"\n{'='*80}\n")
+                    f.write(f"# {result['title']}\n")
+                    f.write(f"Source: {url}\n")
+                    f.write(f"{'='*80}\n\n")
+
+                    if result["content"]:
+                        # Clean up the content
+                        cleaned_lines = []
+                        code_block = False
+                        list_block = False
+                        prev_line = ""
+
+                        for line in result["content"].split("\n"):
+                            current_line = line.rstrip()
+
+                            # Handle code blocks
+                            if current_line.startswith("```"):
+                                code_block = not code_block
+                                cleaned_lines.append(current_line)
+                                continue
+
+                            if code_block:
+                                cleaned_lines.append(current_line)
+                                continue
+
+                            # Handle headers
+                            if current_line.startswith("#"):
+                                if prev_line:
+                                    cleaned_lines.append("")
+                                cleaned_lines.append(current_line)
+                                prev_line = current_line
+                                continue
+
+                            # Handle lists
+                            is_list_item = current_line.lstrip().startswith(
+                                ("-", "*", "+", "1.")
+                            )
+                            if is_list_item:
+                                list_block = True
+                                cleaned_lines.append(current_line)
+                                prev_line = current_line
+                                continue
+                            elif list_block and not current_line:
+                                list_block = False
+                                cleaned_lines.append("")
+                                prev_line = current_line
+                                continue
+
+                            # Handle regular content
+                            if current_line:
+                                if (
+                                    prev_line
+                                    and not list_block
+                                    and not prev_line.startswith("#")
+                                ):
+                                    if not (
+                                        prev_line.endswith(
+                                            (".", "!", "?", ":", ";", ",")
+                                        )
+                                        and len(cleaned_lines) > 0
+                                    ):
+                                        cleaned_lines.append("")
+                                cleaned_lines.append(current_line)
+                                prev_line = current_line
+                            elif prev_line and not list_block:
+                                if cleaned_lines and cleaned_lines[-1] != "":
+                                    cleaned_lines.append("")
+                                prev_line = current_line
+
+                        # Join lines and remove triple newlines
+                        cleaned_content = "\n".join(cleaned_lines)
+                        while "\n\n\n" in cleaned_content:
+                            cleaned_content = cleaned_content.replace("\n\n\n", "\n\n")
+
+                        f.write(cleaned_content)
+                        f.write("\n")
+
+        # Save CSV with content
+        csv_file = f"{base_filename}_content.csv"
         with open(csv_file, "w", newline="", encoding="utf-8") as f:
             csv_writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
             csv_writer.writerow(["Page Title", "URL", "Content"])
 
-            # Process each URL
-            for url in all_urls:
-                self.console.print(f"Processing: {url}")
-
-                # Fetch page content using trafilatura
-                downloaded = fetch_url(url)
-                if downloaded:
-                    content = extract(
-                        downloaded, output_format="markdown", include_images=True
-                    )
-                    metadata = extract_metadata(downloaded)
-                    title = metadata.title if metadata else url
-
-                    # Write page data to CSV
+            for url in sorted_urls:
+                if url in content_map:
+                    result = content_map[url]
                     csv_writer.writerow(
                         [
-                            title,
+                            result["title"],
                             url,
-                            content[:1000] if content else "",  # Limit content length
+                            result["content"][:1000] if result["content"] else "",
                         ]
                     )
 
-        self.console.print("[bold green]Output saved to:[/bold green]")
-        self.console.print("- Conventional tree: [blue]%s[/blue]" % conv_file)
-        self.console.print("- Enhanced tree: [blue]%s[/blue]" % llm_file)
-        self.console.print("- Rich formatted trees: [blue]%s[/blue]" % rich_file)
-        self.console.print("- CSV content: [blue]%s[/blue]" % csv_file)
-
-    def _save_rich_tree_to_file(self, tree, file_console):
-        """Save a rich tree to a file using the provided console."""
-
-        # Define a recursive function to traverse the tree
-        def traverse_tree_for_file(node_id, level):
-            node = tree.get_node(node_id)
-            indent = "  " * level
-
-            # Skip the root node in the output
-            if node_id != "root":
-                # Format based on node type
-                if node.data and node.data.get("type") == "category":
-                    # Category node
-                    file_console.print(f"{indent}[bold]{node.tag}[/bold]")
-                elif node.data and node.data.get("type") == "link":
-                    # Link node - show URL and description
-                    url = node.data.get("url", "")
-                    description = node.data.get("description", "")
-
-                    if description:
-                        file_console.print(
-                            f"{indent}[blue]{node.tag}[/blue]: {description}"
-                        )
-                    else:
-                        file_console.print(f"{indent}[blue]{node.tag}[/blue]")
-
-                    file_console.print(f"{indent}  [dim]{url}[/dim]")
-                else:
-                    # Generic node
-                    file_console.print(f"{indent}{node.tag}")
-
-            # Process children
-            for child_id in tree.is_branch(node_id):
-                traverse_tree_for_file(child_id, level + 1)
-
-        # Display the tree starting from root
-        traverse_tree_for_file("root", 0)
+        return {"merged_context": merged_file, "csv_content": csv_file}
 
     def retrieve_relevant_urls(self, query, include_content=False, max_results=5):
         """Retrieve URLs relevant to a specific query using LLM.

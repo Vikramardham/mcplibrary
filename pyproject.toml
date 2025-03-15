@@ -16,6 +16,7 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "trafilatura>=2.0.0",
     "ipykernel>=6.29.5",
+    "aiohttp>=3.11.13",
 ]
 
 [build-system]
