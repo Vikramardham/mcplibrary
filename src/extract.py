@@ -8,20 +8,19 @@ import argparse
 import os
 from urllib.parse import urlparse
 from pathlib import Path
-import re
 import html
 from rich.console import Console
 from rich.table import Table
 from trafilatura import fetch_url, extract
 
 # Use absolute imports instead of relative imports
-from link_fetcher.fetcher import (
+from lib.fetcher import (
     validate_url,
     fetch_webpage,
     extract_links,
     add_scheme_if_needed,
 )
-from link_fetcher.tree_builder import WebsiteTreeBuilder
+from lib.tree_builder import WebsiteTreeBuilder
 
 
 def display_links(links, include_text=True):

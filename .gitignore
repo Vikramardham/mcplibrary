@@ -12,4 +12,12 @@ wheels/
 .cursorrules
 .windsurfrules
 .cursor
+
 output
+
+# Cache
+**/**/cache/
+**/**/cache/**
+
+# MCP Server cache
+src/mcp_server/cache/

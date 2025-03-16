@@ -153,17 +153,6 @@ class WebsiteTreeBuilder:
         self.all_links = []
         self.use_llm = use_llm
 
-        # Configure Google Generative AI only if LLM is enabled
-        if use_llm:
-            if api_key:
-                genai.configure(api_key=api_key)
-            elif os.getenv("GEMINI_API_KEY"):
-                genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-            else:
-                raise ValueError(
-                    "No API key provided. Please provide an API key or set GEMINI_API_KEY environment variable."
-                )
-
     def analyze_links(self, links, base_url):
         """Analyze and categorize links using both conventional and LLM approaches.
 

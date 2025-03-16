@@ -1,157 +1,90 @@
-# Website Tree Crawler
+# MCP Document Fetcher
 
-A Python library that crawls documentation websites and builds a tree structure of URLs, titles, and content. This library is designed to help create context for Large Language Models (LLMs) by providing structured access to documentation content.
+A Multi-Context Protocol (MCP) server that fetches, caches, and analyzes webpage content. This tool creates hierarchical representations of websites and enables semantic querying of their content.
 
 ## Features
 
-- Crawls documentation websites starting from a root URL
-- Extracts title and content from each page
-- Builds a hierarchical tree structure based on URL paths
-- Creates website-specific output directories for better organization
-- Generates up to 3 levels of hierarchy in the LLM tree (categories, subcategories, and sub-subcategories)
-- Outputs rich content in CSV format with columns for page, URL, content, and images
-- Downloads and saves images separately in a designated sub-folder
-- Provides a retriever function that uses LLMs to fetch relevant URLs based on user questions
-- Filters URLs based on patterns to focus on relevant content
-- Saves results in multiple formats for easy integration with other tools
+- 🌐 Webpage content fetching and caching
+- 📁 Hierarchical site structure generation
+- 🔍 Semantic content querying using Gemini AI
+- 🌲 Tree-based visualization of website structure
+- 🔄 Efficient caching system for repeated queries
 
 ## Installation
 
+1. Clone the repository:
 ```bash
-pip install -r requirements.txt
+git clone <your-repo-url>
+cd mcps
+```
+
+2. Create and activate a virtual environment using `uv`:
+```bash
+uv venv
+source .venv/Scripts/activate (just `.venv/Scripts/activate on windows)
+```
+
+3. Install dependencies:
+```bash
+uv sync 
+```
+
+4. Set up environment variables:
+```bash
+export GEMINI_API_KEY="your-api-key"  # For Windows, use 'set' instead of 'export'
 ```
 
 ## Usage
-
-### Basic Usage
-
-```python
-from src.map import WebsiteTreeCrawler
-
-# Create a crawler
-crawler = WebsiteTreeCrawler(
-    root_url="https://docs.python.org/3/library/",
-    max_pages=100  # Limit the number of pages to crawl
-)
-
-# Start crawling
-tree = crawler.crawl()
-
-# Save results
-crawler.save_tree("docs_tree.json")
-crawler.save_pages("docs_pages.json")
+1. Copy the contents of ./src/doc_fetcher to your local folder containing mcp servers 
+Add the MCP server to your mcp.json (either cursor/windsurf)
 ```
-
-### Command Line Interface
-
-You can run the crawler from the command line:
-
-```bash
-python -m src.link_fetcher https://docs.python.org/3/library/ --output tree --save-to python_docs
-```
-
-This will create the following files in a website-specific output directory:
-- `python_docs_conventional.txt`: Tree based on URL structure
-- `python_docs_llm.txt`: Tree based on AI categorization
-- `python_docs_rich.txt`: Detailed tree views with descriptions
-- `python_docs_content.csv`: CSV file with page content and image references
-- Images folder with downloaded images
-
-### Using the Retriever Function
-
-You can use the retriever function to find relevant URLs for a specific query:
-
-```bash
-python -m src.link_fetcher https://docs.python.org/3/library/ --query "How do I use dictionaries in Python?"
-```
-
-Additional options:
-- `--include-content`: Include page content in query results
-- `--max-results N`: Limit the number of results (default: 5)
-
-### Loading Saved Results
-
-```python
-from src.map import load_tree, load_pages
-
-# Load the saved tree and pages
-tree = load_tree("docs_tree.json")
-pages = load_pages("docs_pages.json")
-
-# Access content
-root_url = tree["root"]["url"]
-root_title = tree["root"]["title"]
-root_children = tree["root"]["children"]
-
-# Access a specific page
-page_url = "https://docs.python.org/3/library/functions.html"
-if page_url in pages:
-    page_title = pages[page_url]["title"]
-    page_content = pages[page_url]["content"]
-```
-
-## Tree Structure
-
-The generated tree has the following structure:
-
-```json
 {
-  "root": {
-    "url": "https://example.com/docs/",
-    "title": "Documentation",
-    "children": {
-      "section1": {
-        "url": "https://example.com/docs/section1/",
-        "title": "Section 1",
-        "children": {
-          "page1": {
-            "url": "https://example.com/docs/section1/page1/",
-            "title": "Page 1",
-            "content": "Content of page 1...",
-            "children": {}
-          }
+    "mcpServers": {
+        "doc-fetcher-mcp": {
+            "command": "uv",
+            "args": [
+                "--directory",
+                "<path_to_mcp_server_folder>",
+                "run",
+                "server.py"
+            ]
         }
-      }
     }
-  }
 }
 ```
 
-## CSV Content Format
+2. Use the available MCP tools:
+- Test it by chatting with your IDE. E.g: I'd like to build a simple chatbot using langgraph and use memory. Use the docs site: @https://langchain-ai.github.io/langgraph/ to understand the framework (The URL MUST be provided to the LLM. It won't do any guess work for you and this is an intentional choice)
 
-The CSV content file has the following columns:
-- Page Title: The title of the webpage
-- URL: The full URL of the page
-- Content: The main text content of the page
-- Images: Comma-separated list of relative paths to downloaded images
+## Project Structure
 
-## Customization
-
-You can customize the crawler behavior:
-
-```python
-crawler = WebsiteTreeCrawler(
-    root_url="https://docs.example.com/",
-    max_pages=200,
-    excluded_patterns=[
-        r'.*\.(css|js|png|jpg|jpeg|gif|svg|pdf|zip|tar|gz|ico)$',
-        r'.*/tags/.*',
-        r'.*/search/.*',
-    ],
-    included_patterns=[
-        r'.*/api/.*',  # Only include URLs containing '/api/'
-    ]
-)
+```
+src/
+├── mcp_server/
+│   ├── server.py      # Main MCP server implementation
+│   └── cache/         # Cached webpage content (gitignored)
+├── link_fetcher/      # Link extraction and tree building
+└── extract/           # HTML content extraction
 ```
 
-## Future Development
+## Cache Management
 
-This library is the first step in building a comprehensive solution for LLM context retrieval. Future enhancements will include:
+The server maintains a cache directory (`src/mcp_server/cache/`) that stores:
+- Webpage content
+- Site structure trees (JSON and Markdown)
+- Extracted links
+- Page content in JSON format
 
-1. Vector embeddings for semantic search
-2. Content chunking strategies
-3. Improved content extraction for specific documentation formats
+The cache is gitignored to prevent committing large amounts of data.
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
 
 ## License
 
-MIT 
+[MIT] 
