@@ -63,15 +63,66 @@ def fetch_and_cache(url: str, max_pages: int = 30) -> dict:
         
         # Extract and process links
         links = extract_links(content, url)
-        links_text = f"URL: {url}\n\nExtracted Links:\n"
+        
+        # Organize links by sections
+        organized_links = {}
         for link_url, link_text in links:
-            links_text += f"- {link_text}: {link_url}\n"
+            # Skip duplicate links and external links
+            if link_url.startswith(url) and link_url not in organized_links:
+                path = urlparse(link_url).path.strip('/')
+                if path:  # Skip the root URL
+                    parts = path.split('/')
+                    current = organized_links
+                    for i, part in enumerate(parts):
+                        if i == len(parts) - 1:
+                            current[part] = {"url": link_url, "title": link_text}
+                        else:
+                            if part not in current:
+                                current[part] = {}
+                            current = current[part]
+        
+        # Generate links text
+        links_text = f"URL: {url}\n\nExtracted Links:\n"
+        def format_links(links_dict, level=0):
+            result = ""
+            indent = "  " * level
+            for key, value in sorted(links_dict.items()):
+                if isinstance(value, dict):
+                    if "url" in value:  # It's a leaf node
+                        result += f"{indent}- {value['title']}: {value['url']}\n"
+                    else:  # It's a directory
+                        result += f"{indent}- {key}/\n"
+                        result += format_links(value, level + 1)
+            return result
+        
+        links_text += format_links(organized_links)
         links_path.write_text(links_text, encoding='utf-8')
         
         # Generate tree structure
         tree_builder = WebsiteTreeBuilder(use_llm=False)
         trees = tree_builder.analyze_links(links, url)
-        tree_dict = trees["conventional"].to_dict()
+        tree_dict = {
+            "tag": urlparse(url).netloc,
+            "children": []
+        }
+        
+        def build_tree(links_dict):
+            children = []
+            for key, value in sorted(links_dict.items()):
+                if isinstance(value, dict):
+                    if "url" in value:  # Leaf node
+                        children.append({
+                            "tag": value["title"],
+                            "url": value["url"]
+                        })
+                    else:  # Directory node
+                        children.append({
+                            "tag": key,
+                            "children": build_tree(value)
+                        })
+            return children
+        
+        tree_dict["children"] = build_tree(organized_links)
         
         # Save both markdown and JSON versions of the tree
         md_tree = dict_tree_to_markdown(tree_dict)
@@ -81,15 +132,16 @@ def fetch_and_cache(url: str, max_pages: int = 30) -> dict:
         # Store individual page contents
         pages_content = {}
         for link_url, link_text in links:
-            try:
-                page_content = fetch_webpage(link_url)
-                pages_content[link_url] = {
-                    "title": link_text,
-                    "content": page_content
-                }
-            except Exception as e:
-                print(f"Error fetching {link_url}: {e}")
-                continue
+            if link_url.startswith(url):  # Only cache internal pages
+                try:
+                    page_content = fetch_webpage(link_url)
+                    pages_content[link_url] = {
+                        "title": link_text,
+                        "content": page_content
+                    }
+                except Exception as e:
+                    print(f"Error fetching {link_url}: {e}")
+                    continue
         
         # Save pages content
         pages_path.write_text(json.dumps(pages_content, indent=2), encoding='utf-8')
@@ -138,18 +190,23 @@ Tree Structure:
 def dict_tree_to_markdown(tree, level=0):
     """Convert a nested tree (or list of trees) into a markdown bullet list."""
     markdown = ""
+    indent = "  " * level
+    
     if isinstance(tree, list):
         for node in tree:
             markdown += dict_tree_to_markdown(node, level)
     elif isinstance(tree, dict):
-        # If at the root and no tag is provided, assume it's a container and process its children
-        if level == 0 and 'tag' not in tree and 'children' in tree:
-            markdown += dict_tree_to_markdown(tree.get('children', []), level)
-        else:
-            indent = '  ' * level
-            tag = tree.get('tag') or tree.get('name') or 'No Tag'
-            markdown += f"{indent}- {tag}\n"
-            markdown += dict_tree_to_markdown(tree.get('children', []), level + 1)
+        tag = tree.get('tag')
+        if tag:  # Only create entry if there's a tag
+            markdown += f"{indent}- {tag}"
+            if 'url' in tree:
+                markdown += f" ({tree['url']})"
+            markdown += "\n"
+            
+        if 'children' in tree:
+            for child in tree['children']:
+                markdown += dict_tree_to_markdown(child, level + 1)
+                
     return markdown
 
 def get_relevant_pages_from_llm(tree: str, query: str) -> list:
