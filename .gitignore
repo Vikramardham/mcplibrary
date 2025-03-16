@@ -12,6 +12,7 @@ wheels/
 .cursorrules
 .windsurfrules
 .cursor
+.env
 
 output
 
