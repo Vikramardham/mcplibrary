@@ -1,0 +1,63 @@
+{
+  "Website Structure": {
+    "children": [
+      {
+        "Main Site (microsoft.github.io)": {
+          "children": [
+            {
+              "Autogen": {
+                "children": [
+                  "../../index.html",
+                  "../../index.html",
+                  ".NET",
+                  ".NET",
+                  "0.2 Docs",
+                  "0.2 Docs",
+                  "API Reference",
+                  "API Reference",
+                  "API Reference",
+                  "AgentChat",
+                  "AgentChat",
+                  "AgentChat",
+                  "Agents",
+                  "Company Research",
+                  "Core",
+                  "Core",
+                  "Custom Agents",
+                  "Examples",
+                  "Extensions",
+                  "Extensions",
+                  "Human-in-the-Loop",
+                  "Installation",
+                  "Introduction",
+                  "Literature Review",
+                  "Logging",
+                  "Magentic-One",
+                  "Managing State",
+                  "Memory",
+                  "Messages",
+                  "Migration Guide for v0.2 to v0.4",
+                  "Models",
+                  "Models",
+                  "Selector Group Chat",
+                  "Serializing Components",
+                  "Show Source",
+                  "Studio",
+                  "Studio",
+                  "Swarm",
+                  "Teams",
+                  "Termination",
+                  "Travel Planning",
+                  "here",
+                  "next\nMigration Guide for v0.2 to v0.4",
+                  "previous\nInstallation",
+                  "tutorial"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

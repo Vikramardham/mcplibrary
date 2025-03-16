@@ -1,0 +1,224 @@
+{
+  "Website Structure": {
+    "children": [
+      {
+        "Main Site (ai.pydantic.dev)": {
+          "children": [
+            {
+              "Agents": {
+                "children": [
+                  "Agents",
+                  "Run the agent",
+                  "Run the agent",
+                  "agent",
+                  "docs",
+                  "reflection",
+                  "system prompt",
+                  "system prompt",
+                  "system prompts",
+                  "system prompts",
+                  "system prompts",
+                  "type checking",
+                  "type-safe"
+                ]
+              }
+            },
+            {
+              "Api": {
+                "children": [
+                  "@agent.system_prompt",
+                  "API Reference",
+                  "Gemini 1.5's Flash",
+                  "OpenAI's GPT-4o model",
+                  "RunContext",
+                  "RunContext",
+                  "pydantic_ai.agent",
+                  "pydantic_ai.common_tools",
+                  "pydantic_ai.exceptions",
+                  "pydantic_ai.format_as_xml",
+                  "pydantic_ai.messages",
+                  "pydantic_ai.models",
+                  "pydantic_ai.models.anthropic",
+                  "pydantic_ai.models.bedrock",
+                  "pydantic_ai.models.cohere",
+                  "pydantic_ai.models.fallback",
+                  "pydantic_ai.models.function",
+                  "pydantic_ai.models.gemini",
+                  "pydantic_ai.models.groq",
+                  "pydantic_ai.models.mistral",
+                  "pydantic_ai.models.openai",
+                  "pydantic_ai.models.test",
+                  "pydantic_ai.models.vertexai",
+                  "pydantic_ai.providers",
+                  "pydantic_ai.result",
+                  "pydantic_ai.settings",
+                  "pydantic_ai.tools",
+                  "pydantic_ai.usage",
+                  "pydantic_graph",
+                  "pydantic_graph.exceptions",
+                  "pydantic_graph.mermaid",
+                  "pydantic_graph.nodes",
+                  "pydantic_graph.persistence",
+                  "system_prompt keyword argument"
+                ]
+              }
+            },
+            {
+              "Cli": {
+                "children": [
+                  "Command Line Interface (CLI)"
+                ]
+              }
+            },
+            {
+              "Common tools": {
+                "children": [
+                  "Common Tools"
+                ]
+              }
+            },
+            {
+              "Contributing": {
+                "children": [
+                  "Contributing"
+                ]
+              }
+            },
+            {
+              "Dependencies": {
+                "children": [
+                  "Dependencies",
+                  "dependency injection"
+                ]
+              }
+            },
+            {
+              "Examples": {
+                "children": [
+                  "Bank support",
+                  "Chat App with FastAPI",
+                  "Examples",
+                  "Flight booking",
+                  "Pydantic Model",
+                  "Question Graph",
+                  "RAG",
+                  "SQL Generation",
+                  "Stream markdown",
+                  "Stream whales",
+                  "Weather agent",
+                  "here",
+                  "in the examples"
+                ]
+              }
+            },
+            {
+              "Graph": {
+                "children": [
+                  "Graphs",
+                  "Pydantic Graph"
+                ]
+              }
+            },
+            {
+              "Help": {
+                "children": [
+                  "Getting Help"
+                ]
+              }
+            },
+            {
+              "Homepage": {
+                "children": [
+                  "Introduction",
+                  "PydanticAI",
+                  "PydanticAI"
+                ]
+              }
+            },
+            {
+              "Input": {
+                "children": [
+                  "Image, Audio & Document Input"
+                ]
+              }
+            },
+            {
+              "Install": {
+                "children": [
+                  "Installation"
+                ]
+              }
+            },
+            {
+              "Logfire": {
+                "children": [
+                  "Debugging and Monitoring",
+                  "Monitoring and Performance",
+                  "integrates"
+                ]
+              }
+            },
+            {
+              "Message history": {
+                "children": [
+                  "Messages and chat history"
+                ]
+              }
+            },
+            {
+              "Models": {
+                "children": [
+                  "Models",
+                  "other models"
+                ]
+              }
+            },
+            {
+              "Multi agent applications": {
+                "children": [
+                  "Multi-agent Applications"
+                ]
+              }
+            },
+            {
+              "Results": {
+                "children": [
+                  "Results",
+                  "result validators",
+                  "stream",
+                  "validate and structure"
+                ]
+              }
+            },
+            {
+              "Testing evals": {
+                "children": [
+                  "Testing and Evals",
+                  "unit tests"
+                ]
+              }
+            },
+            {
+              "Tools": {
+                "children": [
+                  "Function Tools",
+                  "extracted",
+                  "tool",
+                  "tool",
+                  "tools"
+                ]
+              }
+            },
+            {
+              "Troubleshooting": {
+                "children": [
+                  "Troubleshooting"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

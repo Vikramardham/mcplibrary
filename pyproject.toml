@@ -17,6 +17,7 @@ dependencies = [
     "trafilatura>=2.0.0",
     "ipykernel>=6.29.5",
     "aiohttp>=3.11.13",
+    "mcp[cli]>=1.4.1",
 ]
 
 [build-system]

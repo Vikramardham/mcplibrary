@@ -41,7 +41,7 @@ def add_scheme_if_needed(url):
         URL with scheme added if needed
     """
     if not url.startswith(("http://", "https://")):
-        return "http://" + url
+        return "https://" + url
     return url
 
 
